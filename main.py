@@ -1,14 +1,19 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-
+from modelClass import modelClass
 
 #params
 train_size = 0.8
-batch_size = 4
-block_size = 8
-max_iters = 10000
-learning_rate = 3e-4
+
+batch_size = 64
+block_size = 128
+max_iters = 1000
+learning_rate = 3e-5
+eval_iters = 100
+embed_dim = 384
+decoder_layers = 12
+dropout = 0.2
 
 
 device = 'mps' if torch.backends.mps.is_available() else 'cpu'
@@ -55,43 +60,35 @@ def get_batch(split):
     x, y = x.to(device), y.to(device)
     return x, y
 
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for s in ["Train", "Validation"]:
+        losses = torch.zeros(eval_iters)
+        for i in range(eval_iters):
+            x, y = get_batch(s)
+            logits, loss = model.forward(x, y)
+            losses[i] = loss.item()
+        out[s] = losses.mean()
+    model.train()
+    return out
 
 
-class modelClass(nn.Module):
-    def __init__(self, vocab_size):
-        super().__init__()
-        self.embedding_table = nn.Embedding(vocab_size, vocab_size)
 
-    def forward(self, index, targets = None):
-        logits = self.embedding_table(index)
-
-        if targets == None:
-            loss = None
-        else:
-            B, T, C = logits.shape
-            logits = logits.view(B*T, C)
-            targets = targets.view(B*T)
-            loss = F.cross_entropy(logits, targets)
-        return logits, loss
-
-    def generate(self, index, max_new_tokens):
-        for i in range (max_new_tokens):
-            logits, loss = self.forward(index)
-            logits = logits[:, -1, :]
-            probs = F.softmax(logits, dim=-1)
-            index_next = torch.multinomial(probs, num_samples=1)
-            index = torch.cat((index, index_next), dim=1)
-        return index
-    
 model = modelClass(vocab_size)
 m = model.to(device)
-context = torch.zeros ((1,1), dtype=torch.long, device=device)
-generated_chars = decode(m.generate (context, max_new_tokens=500)[0].tolist())
+# context = torch.zeros ((1,1), dtype=torch.long, device=device)
+# generated_chars = decode(m.generate(context, max_new_tokens=500)[0].tolist())
 
 
 optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
 
 for i in range(max_iters):
+
+    if i % eval_iters == 0:
+        print(estimate_loss()["Train"])
+        
     xb, yb = get_batch("Train")
     logits, loss = model.forward(xb, yb)
     optimizer.zero_grad(set_to_none=True)
@@ -100,6 +97,6 @@ for i in range(max_iters):
 
 print(loss.item())
 m = model.to(device)
-context = torch.zeros ((1,1), dtype=torch.long, device=device)
-generated_chars = decode(m.generate (context, max_new_tokens=500)[0].tolist())
+context = torch.zeros((1,1), dtype=torch.long, device=device)
+generated_chars = decode(m.generate(context, max_new_tokens=500)[0].tolist())
 print(generated_chars )
